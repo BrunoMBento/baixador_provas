@@ -1,0 +1,61 @@
+name: Release Windows
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Obter código
+        uses: actions/checkout@v6
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Conferir versão
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "A tag $env:GITHUB_REF_NAME deve corresponder à versão v$version do package.json."
+          }
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Executar testes
+        run: npm test
+
+      - name: Instalar Chromium para Windows
+        run: npm run setup:browser
+
+      - name: Gerar pacote portátil
+        run: npm run make:win
+
+      - name: Publicar release e hash SHA-256
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $archives = @(Get-ChildItem -Path out/make -Filter "*.zip" -Recurse -File)
+          if ($archives.Count -ne 1) {
+            throw "Era esperado um ZIP Windows, mas foram encontrados $($archives.Count)."
+          }
+          $archive = $archives[0]
+          $checksum = "$($archive.FullName).sha256"
+          $hash = (Get-FileHash -Path $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -Path $checksum -Value "$hash  $($archive.Name)" -Encoding ascii
+          gh release create $env:GITHUB_REF_NAME $archive.FullName $checksum `
+            --verify-tag --title $env:GITHUB_REF_NAME --generate-notes
+          if ($LASTEXITCODE -ne 0) {
+            throw "Não foi possível publicar a release."
+          }

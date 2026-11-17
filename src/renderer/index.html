@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'"
+    />
+    <title>Baixador de Provas</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="renderer.js" defer></script>
+  </head>
+  <body>
+    <main class="panel">
+      <header>
+        <p class="eyebrow">CEBRASPE</p>
+        <h1>Baixador de provas</h1>
+        <p class="intro">
+          Organize provas e gabaritos de concursos encerrados em pastas no seu computador.
+        </p>
+      </header>
+
+      <form id="download-form">
+        <label for="destination">Pasta raiz dos downloads</label>
+        <div class="folder-picker">
+          <input
+            id="destination"
+            type="text"
+            placeholder="Selecione uma pasta"
+            readonly
+            required
+          />
+          <button id="choose-folder" class="button secondary" type="button">
+            Escolher pasta
+          </button>
+        </div>
+
+        <label for="delay">Intervalo entre downloads (milissegundos)</label>
+        <input id="delay" type="number" min="0" max="600000" step="100" value="1500" />
+        <p class="hint">Aguarda pelo menos esse intervalo entre o início de cada arquivo.</p>
+
+        <label class="checkbox-row">
+          <input id="replace-existing" type="checkbox" />
+          <span>Substituir arquivos existentes</span>
+        </label>
+
+        <div class="actions">
+          <button id="start" class="button primary" type="submit">Iniciar download</button>
+          <button id="cancel" class="button cancel" type="button" disabled>Cancelar</button>
+        </div>
+      </form>
+
+      <section class="progress-section" aria-live="polite">
+        <div class="progress-heading">
+          <h2>Progresso</h2>
+          <span id="percentage">0%</span>
+        </div>
+        <progress id="progress" max="100" value="0"></progress>
+        <div class="counts">
+          <span>Concursos: <strong id="contest-count">0</strong></span>
+          <span>PDFs encontrados: <strong id="file-count">0</strong></span>
+          <span>Baixados: <strong id="downloaded-count">0</strong></span>
+          <span>Ignorados: <strong id="skipped-count">0</strong></span>
+          <span>Falhas: <strong id="failed-count">0</strong></span>
+        </div>
+        <p id="status" class="status">Pronto para iniciar.</p>
+        <div id="summary" class="summary" hidden></div>
+      </section>
+    </main>
+  </body>
+</html>

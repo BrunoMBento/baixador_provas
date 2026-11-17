@@ -1,0 +1,25 @@
+{
+  "name": "baixador-provas",
+  "productName": "Baixador de Provas",
+  "version": "1.0.0",
+  "description": "Baixa provas e gabaritos de concursos encerrados do Cebraspe.",
+  "main": "src/main/main.js",
+  "engines": {
+    "node": ">=22.13.0",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "start": "electron-forge start",
+    "setup:browser": "node scripts/install-browser.js",
+    "make:win": "electron-forge make --platform win32 --arch x64",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "playwright": "^1.53.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^8.0.1",
+    "@electron-forge/maker-zip": "^8.0.1",
+    "electron": "^45.3.4"
+  }
+}
