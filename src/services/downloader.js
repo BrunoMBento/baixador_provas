@@ -154,9 +154,11 @@ class DownloadJob extends EventEmitter {
 
       let page;
       const getPage = async () => {
-        if (!page) {
-          this.browser = await this.launchBrowser();
-          this.throwIfCancelled();
+        if (!page || page.isClosed()) {
+          if (!this.browser) {
+            this.browser = await this.launchBrowser();
+            this.throwIfCancelled();
+          }
           page = await this.browser.newPage();
         }
         return page;

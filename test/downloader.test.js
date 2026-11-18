@@ -23,7 +23,7 @@ function createDependencies() {
       let connected = true;
       return {
         isConnected: () => connected,
-        newPage: async () => ({}),
+        newPage: async () => ({ isClosed: () => false }),
         close: async () => { connected = false; },
       };
     },
@@ -78,6 +78,45 @@ test("resumes reading after cancellation without consulting completed contests a
     assert.deepEqual(second.calls.scanned, ["CONCURSO_2"]);
     assert.equal(resumed.downloaded, 2);
     assert.equal(resumed.scannedCount, 2);
+  });
+});
+
+test("continues on a new page after a failed scan and retries it on the next run", async () => {
+  await withDestination(async (destinationPath) => {
+    const dependencies = createDependencies();
+    const pages = [];
+    dependencies.launchBrowser = async () => {
+      let connected = true;
+      return {
+        isConnected: () => connected,
+        newPage: async () => {
+          const page = { closed: false, isClosed() { return this.closed; } };
+          pages.push(page);
+          return page;
+        },
+        close: async () => { connected = false; },
+      };
+    };
+    const scan = dependencies.scrapeContestPdfs;
+    dependencies.scrapeContestPdfs = async (page, contest) => {
+      if (contest.identifier === "CONCURSO_1") {
+        page.closed = true;
+        throw new Error("limite de 3 segundos");
+      }
+      return scan(page, contest);
+    };
+    const result = await new DownloadJob(dependencies).start(options(destinationPath));
+    assert.equal(pages.length, 2);
+    assert.equal(result.downloaded, 1);
+    assert.equal(result.failed.length, 1);
+    assert.deepEqual((await loadCheckpoint(destinationPath)).contests.map((contest) => contest.pdfs),
+      [null, [pdfUrl("CONCURSO_2")]]);
+
+    const retry = createDependencies();
+    const resumed = await new DownloadJob(retry).start(options(destinationPath));
+    assert.deepEqual(retry.calls.scanned, ["CONCURSO_1"]);
+    assert.equal(resumed.downloaded, 1);
+    assert.equal(resumed.skipped, 1);
   });
 });
 

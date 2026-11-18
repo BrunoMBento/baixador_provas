@@ -26,6 +26,10 @@ Ao cancelar ou fechar
 o aplicativo, inicie novamente com a mesma pasta para retomar: concursos já lidos não
 são consultados novamente e arquivos existentes são ignorados. Concursos ou arquivos
 que falharam são tentados novamente na próxima execução.
+Se o servidor do Cebraspe retornar um erro ao ler um concurso, o aplicativo informa
+essa falha e mantém o concurso pendente para uma nova tentativa. Cada página de
+concurso tem um limite de 3 segundos para leitura; se demorar mais, o aplicativo
+passa ao próximo concurso e tentará novamente na próxima execução.
 
 A estimativa soma o tempo médio das leituras já realizadas, multiplicado pelos
 concursos ainda não lidos, ao intervalo selecionado multiplicado pelos PDFs restantes.
