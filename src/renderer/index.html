@@ -9,6 +9,7 @@
     />
     <title>Baixador de Provas</title>
     <link rel="stylesheet" href="styles.css" />
+    <script src="estimate.js" defer></script>
     <script src="renderer.js" defer></script>
   </head>
   <body>
@@ -36,17 +37,26 @@
           </button>
         </div>
 
-        <label for="delay">Intervalo entre downloads (milissegundos)</label>
-        <input id="delay" type="number" min="0" max="600000" step="100" value="1500" />
-        <p class="hint">Aguarda pelo menos esse intervalo entre o início de cada arquivo.</p>
+        <div class="delay-heading">
+          <label for="delay">Intervalo entre downloads</label>
+          <output id="delay-value" for="delay">2 s</output>
+        </div>
+        <input id="delay" type="range" min="0.5" max="3.5" step="0.5" value="2" />
+        <div class="range-ticks" aria-hidden="true">
+          <span>0,5</span><span>1</span><span>1,5</span><span>2</span>
+          <span>2,5</span><span>3</span><span>3,5 s</span>
+        </div>
+        <p class="hint">Intervalo mínimo entre o início de cada arquivo.</p>
 
         <label class="checkbox-row">
           <input id="replace-existing" type="checkbox" />
           <span>Substituir arquivos existentes</span>
         </label>
+        <p class="hint">Ao marcar, uma nova leitura será iniciada e os arquivos existentes serão baixados novamente.</p>
 
         <div class="actions">
           <button id="start" class="button primary" type="submit">Iniciar download</button>
+          <button id="pause" class="button secondary" type="button" disabled>Pausar</button>
           <button id="cancel" class="button cancel" type="button" disabled>Cancelar</button>
         </div>
       </form>
@@ -59,12 +69,14 @@
         <progress id="progress" max="100" value="0"></progress>
         <div class="counts">
           <span>Concursos: <strong id="contest-count">0</strong></span>
+          <span>Lidos: <strong id="scanned-count">0</strong></span>
           <span>PDFs encontrados: <strong id="file-count">0</strong></span>
           <span>Baixados: <strong id="downloaded-count">0</strong></span>
           <span>Ignorados: <strong id="skipped-count">0</strong></span>
           <span>Falhas: <strong id="failed-count">0</strong></span>
         </div>
         <p id="status" class="status">Pronto para iniciar.</p>
+        <p id="time-estimate" class="time-estimate">Tempo estimado: indisponível</p>
         <div id="summary" class="summary" hidden></div>
       </section>
     </main>

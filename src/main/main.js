@@ -1,6 +1,7 @@
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { DownloadJob } = require("../services/downloader");
+const { isValidDelay } = require("../services/validation");
 
 let mainWindow;
 const downloadJob = new DownloadJob();
@@ -60,9 +61,7 @@ app.whenReady().then(() => {
       typeof options.destinationPath !== "string" ||
       !path.isAbsolute(options.destinationPath) ||
       typeof options.replaceExisting !== "boolean" ||
-      !Number.isInteger(options.delayMs) ||
-      options.delayMs < 0 ||
-      options.delayMs > 600_000
+      !isValidDelay(options.delayMs)
     ) {
       throw new Error("As configurações de download são inválidas.");
     }
@@ -75,6 +74,19 @@ app.whenReady().then(() => {
     return downloadJob.cancel();
   });
 
+  ipcMain.handle("download:pause", (event) => {
+    assertTrustedSender(event);
+    downloadJob.pause();
+  });
+
+  ipcMain.handle("download:resume", (event, delayMs) => {
+    assertTrustedSender(event);
+    if (!isValidDelay(delayMs)) {
+      throw new Error("O intervalo de download é inválido.");
+    }
+    downloadJob.resume(delayMs);
+  });
+
   createWindow();
 
   app.on("activate", () => {
@@ -84,10 +96,26 @@ app.whenReady().then(() => {
   });
 });
 
-app.on("before-quit", () => {
-  downloadJob.cancel().catch((error) => {
-    console.error("Não foi possível encerrar o navegador do Playwright:", error);
-  });
+let closing = false;
+app.on("before-quit", (event) => {
+  if (!downloadJob.running) {
+    return;
+  }
+  event.preventDefault();
+  if (closing) {
+    return;
+  }
+  closing = true;
+  (async () => {
+    try {
+      await downloadJob.cancel();
+      await downloadJob.completion;
+      app.quit();
+    } catch (error) {
+      closing = false;
+      dialog.showErrorBox("Erro ao encerrar", `Não foi possível interromper a operação: ${error.message}`);
+    }
+  })();
 });
 
 app.on("window-all-closed", () => {

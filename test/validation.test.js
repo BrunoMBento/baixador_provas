@@ -6,7 +6,17 @@ const {
   getContestFromUrl,
   getPdfFileName,
   getPdfUrl,
+  isValidDelay,
 } = require("../src/services/validation");
+
+test("accepts only slider intervals from 0.5 to 3.5 seconds", () => {
+  for (const delay of [500, 1000, 1500, 2000, 2500, 3000, 3500]) {
+    assert.equal(isValidDelay(delay), true);
+  }
+  for (const delay of [0, 499, 750, 3501, 4000, "2000", NaN]) {
+    assert.equal(isValidDelay(delay), false);
+  }
+});
 
 test("extracts a contest folder from its Cebraspe URL", () => {
   assert.deepEqual(

@@ -1,7 +1,9 @@
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs/promises");
+const { performance } = require("node:perf_hooks");
 const { launchBrowser } = require("./browser");
 const { discoverContests, scrapeContestPdfs } = require("./scraper");
+const { loadCheckpoint, saveCheckpoint } = require("./checkpoint");
 const {
   getTargetFile,
   isExistingFile,
@@ -14,16 +16,52 @@ const {
 } = require("./validation");
 
 class DownloadJob extends EventEmitter {
-  constructor() {
+  constructor(dependencies = {}) {
     super();
+    this.launchBrowser = dependencies.launchBrowser ?? launchBrowser;
+    this.discoverContests = dependencies.discoverContests ?? discoverContests;
+    this.scrapeContestPdfs = dependencies.scrapeContestPdfs ?? scrapeContestPdfs;
+    this.fetchFile = dependencies.fetchFile ?? fetch;
+    this.now = dependencies.now ?? (() => performance.now());
     this.running = false;
     this.cancelled = false;
+    this.paused = false;
     this.browser = null;
     this.abortController = null;
+    this.lastProgress = null;
+    this.wakePause = null;
+    this.wakeDelay = null;
+    this.completion = Promise.resolve();
   }
 
   emitProgress(progress) {
-    this.emit("progress", progress);
+    this.lastProgress = progress;
+    this.emit("progress", this.paused && progress.phase !== "finished"
+      ? { ...progress, phase: "pausing", message: "Pausando após concluir a operação em andamento..." }
+      : progress);
+  }
+
+  pause() {
+    if (!this.running || this.cancelled || this.paused) {
+      throw new Error("Não há uma operação em andamento para pausar.");
+    }
+    this.paused = true;
+    this.emit("progress", {
+      ...this.lastProgress,
+      phase: "pausing",
+      message: "Pausando após concluir a operação em andamento...",
+    });
+    this.wakeDelay?.();
+  }
+
+  resume(delayMs = this.delayMs) {
+    if (!this.running || this.cancelled || !this.paused) {
+      throw new Error("Não há uma operação pausada para continuar.");
+    }
+    this.delayMs = delayMs;
+    this.paused = false;
+    this.wakePause?.();
+    this.emit("progress", this.lastProgress);
   }
 
   async cancel() {
@@ -33,6 +71,7 @@ class DownloadJob extends EventEmitter {
 
     this.cancelled = true;
     this.abortController?.abort();
+    this.wakePause?.();
     if (this.browser?.isConnected()) {
       await this.browser.close();
     }
@@ -46,6 +85,23 @@ class DownloadJob extends EventEmitter {
     }
   }
 
+  async waitIfPaused() {
+    this.throwIfCancelled();
+    while (this.paused) {
+      const resumed = new Promise((resolve) => {
+        this.wakePause = resolve;
+      });
+      this.emit("progress", {
+        ...this.lastProgress,
+        phase: "paused",
+        message: "Operação pausada. Clique em Continuar para retomar.",
+      });
+      await resumed;
+      this.wakePause = null;
+      this.throwIfCancelled();
+    }
+  }
+
   async start(options) {
     if (this.running) {
       throw new Error("Já existe um download em andamento.");
@@ -53,133 +109,216 @@ class DownloadJob extends EventEmitter {
 
     this.running = true;
     this.cancelled = false;
+    this.paused = false;
+    this.delayMs = options.delayMs;
     this.abortController = new AbortController();
+    let finish;
+    this.completion = new Promise((resolve) => {
+      finish = resolve;
+    });
+    let failed = false;
     const summary = {
       contestCount: 0,
+      scannedCount: 0,
+      scanProcessed: 0,
       fileCount: 0,
       downloaded: 0,
       skipped: 0,
       fileFailures: 0,
+      downloadProcessed: 0,
+      pendingFiles: 0,
+      readDurationMs: 0,
+      readSamples: 0,
+      estimateReady: false,
       failed: [],
       cancelled: false,
+      stage: "scanning",
+    };
+
+    const report = (phase, message) => {
+      this.emitProgress({ ...summary, phase, message });
     };
 
     try {
+      report("discovering", "Preparando a leitura dos concursos...");
       const destination = await fs.stat(options.destinationPath);
       if (!destination.isDirectory()) {
         throw new Error("A pasta de destino selecionada não é um diretório.");
       }
 
-      this.emitProgress({
-        phase: "discovering",
-        message: "Localizando concursos encerrados...",
-        ...summary,
-      });
-
-      this.browser = await launchBrowser();
+      await this.waitIfPaused();
+      let checkpoint = options.replaceExisting
+        ? null
+        : await loadCheckpoint(options.destinationPath);
       this.throwIfCancelled();
-      const page = await this.browser.newPage();
-      const contests = await discoverContests(page);
-      this.throwIfCancelled();
-      summary.contestCount = contests.length;
-      const files = [];
 
-      for (let index = 0; index < contests.length; index += 1) {
-        this.throwIfCancelled();
-        const contest = contests[index];
-        this.emitProgress({
-          phase: "scanning",
-          message: `Lendo concurso ${index + 1} de ${contests.length}: ${contest.identifier}`,
-          ...summary,
-        });
+      let page;
+      const getPage = async () => {
+        if (!page) {
+          this.browser = await this.launchBrowser();
+          this.throwIfCancelled();
+          page = await this.browser.newPage();
+        }
+        return page;
+      };
 
+      if (!checkpoint) {
+        report("discovering", "Localizando concursos encerrados...");
+        let contests;
         try {
-          const urls = await scrapeContestPdfs(page, contest);
+          contests = await this.discoverContests(await getPage());
+        } catch (error) {
+          this.throwIfCancelled();
+          throw error;
+        }
+        this.throwIfCancelled();
+        checkpoint = {
+          version: 1,
+          contests: contests.map((contest) => ({ ...contest, pdfs: null })),
+        };
+        await saveCheckpoint(options.destinationPath, checkpoint);
+      }
+
+      summary.contestCount = checkpoint.contests.length;
+      summary.scannedCount = checkpoint.contests.filter((contest) => contest.pdfs !== null).length;
+      summary.scanProcessed = summary.scannedCount;
+      summary.fileCount = checkpoint.contests.reduce(
+        (count, contest) => count + (contest.pdfs?.length ?? 0),
+        0,
+      );
+      for (const contest of checkpoint.contests) {
+        if (contest.pdfs !== null && contest.readDurationMs !== undefined) {
+          summary.readDurationMs += contest.readDurationMs;
+          summary.readSamples += 1;
+        }
+      }
+
+      const files = [];
+      const prepareFiles = async (contest) => {
+        for (const url of contest.pdfs) {
+          await this.waitIfPaused();
+          const file = { contestId: contest.identifier, url, pending: false };
+          try {
+            file.fileName = getPdfFileName(url);
+            file.target = await getTargetFile(options.destinationPath, contest.identifier, url);
+            file.pending = options.replaceExisting || !(await isExistingFile(file.target));
+            if (file.pending) {
+              summary.pendingFiles += 1;
+            }
+          } catch (error) {
+            this.throwIfCancelled();
+            file.error = error;
+          }
+          files.push(file);
+        }
+      };
+
+      report("scanning", "Verificando arquivos dos concursos já lidos...");
+      for (const contest of checkpoint.contests) {
+        if (contest.pdfs !== null) {
+          await prepareFiles(contest);
+        }
+      }
+      summary.estimateReady = true;
+      report("scanning", `Retomando leitura: ${summary.scannedCount} de ${summary.contestCount} concursos já lidos.`);
+
+      for (const [index, contest] of checkpoint.contests.entries()) {
+        if (contest.pdfs !== null) {
+          continue;
+        }
+        await this.waitIfPaused();
+        report("scanning", `Lendo concurso ${index + 1} de ${summary.contestCount}: ${contest.identifier}`);
+
+        let urls;
+        let startedAt;
+        try {
+          const contestPage = await getPage();
+          startedAt = this.now();
+          urls = await this.scrapeContestPdfs(contestPage, contest);
           await fs.mkdir(
             getContestDirectory(options.destinationPath, contest.identifier),
             { recursive: true },
           );
-          for (const url of urls) {
-            files.push({ contestId: contest.identifier, url });
-          }
         } catch (error) {
           this.throwIfCancelled();
-          summary.failed.push({
-            name: contest.identifier,
-            message: error.message,
-          });
-        }
-      }
-
-      summary.fileCount = files.length;
-      this.emitProgress({
-        phase: "downloading",
-        message: files.length
-          ? `${files.length} arquivos encontrados. Iniciando downloads...`
-          : "Nenhum PDF encontrado na seção Provas e gabaritos.",
-        ...summary,
-      });
-
-      let lastDownloadStartedAt = 0;
-      for (const [index, file] of files.entries()) {
-        this.throwIfCancelled();
-        const fileName = getPdfFileName(file.url);
-        const target = await getTargetFile(
-          options.destinationPath,
-          file.contestId,
-          file.url,
-        );
-
-        await fs.mkdir(getContestDirectory(options.destinationPath, file.contestId), {
-          recursive: true,
-        });
-
-        if (!options.replaceExisting && (await isExistingFile(target))) {
-          summary.skipped += 1;
-          this.emitProgress({
-            phase: "downloading",
-            message: `Arquivo já existe; ignorado: ${fileName}`,
-            current: index + 1,
-            ...summary,
-          });
+          summary.failed.push({ name: contest.identifier, message: error.message });
+          summary.scanProcessed += 1;
           continue;
         }
 
-        const waitMs =
-          options.delayMs - (Date.now() - lastDownloadStartedAt);
-        if (lastDownloadStartedAt > 0 && waitMs > 0) {
-          await this.wait(waitMs);
-        }
-        this.throwIfCancelled();
-        lastDownloadStartedAt = Date.now();
+        contest.pdfs = urls;
+        contest.readDurationMs = Math.max(0, this.now() - startedAt);
+        await saveCheckpoint(options.destinationPath, checkpoint);
+        summary.scannedCount += 1;
+        summary.scanProcessed += 1;
+        summary.fileCount += urls.length;
+        summary.readDurationMs += contest.readDurationMs;
+        summary.readSamples += 1;
+        await prepareFiles(contest);
+        report("scanning", `Concursos lidos: ${summary.scannedCount} de ${summary.contestCount}.`);
+      }
 
-        let fileFailed = false;
+      await this.waitIfPaused();
+      summary.stage = "downloading";
+      report("downloading", files.length
+        ? `${files.length} arquivos encontrados. Iniciando downloads...`
+        : "Nenhum PDF encontrado na seção Provas e gabaritos.");
+
+      let lastDownloadStartedAt = null;
+      for (const file of files) {
+        await this.waitIfPaused();
+        const fileName = file.fileName ?? file.url;
+
         try {
-          const response = await fetch(file.url, {
+          if (file.error) {
+            throw file.error;
+          }
+          const exists = !options.replaceExisting && await isExistingFile(file.target);
+          if (file.pending !== !exists) {
+            file.pending = !exists;
+            summary.pendingFiles += file.pending ? 1 : -1;
+          }
+          if (exists) {
+            summary.skipped += 1;
+            summary.downloadProcessed += 1;
+            report("downloading", `Arquivo já existe; ignorado: ${fileName}`);
+            continue;
+          }
+
+          while (lastDownloadStartedAt !== null) {
+            await this.waitIfPaused();
+            const waitMs = this.delayMs - (this.now() - lastDownloadStartedAt);
+            if (waitMs <= 0) {
+              break;
+            }
+            await this.wait(waitMs);
+          }
+          await this.waitIfPaused();
+          lastDownloadStartedAt = this.now();
+
+          const response = await this.fetchFile(file.url, {
             signal: this.abortController.signal,
             headers: { "User-Agent": "BaixadorDeProvas/1.0" },
           });
           getPdfUrl(response.url, file.url);
-          await writePdfResponse(response, target, options.replaceExisting);
+          await writePdfResponse(response, file.target, options.replaceExisting);
           summary.downloaded += 1;
         } catch (error) {
           this.throwIfCancelled();
-          fileFailed = true;
           summary.fileFailures += 1;
-          summary.failed.push({ name: fileName, message: error.message });
+          summary.failed.push({ name: `${file.contestId}/${fileName}`, message: error.message });
         }
 
-        this.emitProgress({
-          phase: "downloading",
-          message: fileFailed
-            ? `Falha ao baixar: ${fileName}`
-            : `Processados ${index + 1} de ${files.length} arquivos`,
-          current: index + 1,
-          ...summary,
-        });
+        if (file.pending) {
+          summary.pendingFiles -= 1;
+          file.pending = false;
+        }
+        summary.downloadProcessed += 1;
+        report("downloading", `Processados ${summary.downloadProcessed} de ${files.length} arquivos.`);
       }
     } catch (error) {
-      if (!this.cancelled) {
+      if (!this.cancelled || error.name !== "AbortError") {
+        failed = true;
         throw error;
       }
     } finally {
@@ -187,18 +326,26 @@ class DownloadJob extends EventEmitter {
         if (this.browser?.isConnected()) {
           await this.browser.close();
         }
+      } catch (error) {
+        failed = true;
+        throw error;
       } finally {
         this.browser = null;
         summary.cancelled = this.cancelled;
         this.running = false;
+        this.paused = false;
         this.abortController = null;
         this.emitProgress({
-          phase: "finished",
-          message: summary.cancelled
-            ? "Operação cancelada."
-            : "Processamento concluído.",
           ...summary,
+          phase: "finished",
+          fatalError: failed,
+          message: failed
+            ? "Operação interrompida por um erro."
+            : summary.cancelled
+              ? "Operação cancelada. Os concursos já lidos foram salvos."
+              : "Processamento concluído.",
         });
+        finish();
       }
     }
 
@@ -208,17 +355,23 @@ class DownloadJob extends EventEmitter {
   wait(milliseconds) {
     return new Promise((resolve, reject) => {
       const signal = this.abortController.signal;
-      const cleanup = () => signal.removeEventListener("abort", onAbort);
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        this.wakeDelay = null;
+      };
+      const onAbort = () => {
+        cleanup();
+        reject(Object.assign(new Error("Operação cancelada."), { name: "AbortError" }));
+      };
       const timer = setTimeout(() => {
         cleanup();
         resolve();
       }, milliseconds);
-      const onAbort = () => {
-        clearTimeout(timer);
+      this.wakeDelay = () => {
         cleanup();
-        reject(Object.assign(new Error("Operação cancelada."), { name: "AbortError" }));
+        resolve();
       };
-
       signal.addEventListener("abort", onAbort, { once: true });
     });
   }

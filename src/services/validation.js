@@ -7,6 +7,11 @@ const SITE_HOSTS = new Set([
   "www.cespe.unb.br",
 ]);
 
+function isValidDelay(delayMs) {
+  return Number.isInteger(delayMs) &&
+    delayMs >= 500 && delayMs <= 3500 && delayMs % 500 === 0;
+}
+
 function getContestFromUrl(rawUrl) {
   const url = new URL(rawUrl, LISTING_URL);
   const match = url.pathname.match(/^\/concursos\/([A-Za-z0-9][A-Za-z0-9_-]*)\/?$/);
@@ -88,6 +93,7 @@ function getContestDirectory(destinationPath, identifier) {
 
 module.exports = {
   LISTING_URL,
+  isValidDelay,
   getContestDirectory,
   getContestFromUrl,
   getPdfFileName,

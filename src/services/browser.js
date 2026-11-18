@@ -4,7 +4,7 @@ const { app } = require("electron");
 
 function getBrowserDirectory() {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, ".local-browsers");
+    return process.resourcesPath;
   }
 
   return path.join(

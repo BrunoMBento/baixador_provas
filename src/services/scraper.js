@@ -33,6 +33,10 @@ async function discoverContests(page) {
 
 async function scrapeContestPdfs(page, contest) {
   await page.goto(contest.url, { waitUntil: "networkidle", timeout: 45_000 });
+  await page.locator("ul.page-concursos__list").first().waitFor({
+    state: "attached",
+    timeout: 30_000,
+  });
 
   const rawUrls = await page.locator("h2").evaluateAll((headings) => {
     const heading = headings.find(
