@@ -44,18 +44,20 @@ test("accepts PDFs from the site's file hosts and rejects other links", () => {
 });
 
 test("sanitizes PDF names and keeps contest folders under the destination", () => {
+  const destination = path.resolve("downloads");
+
   assert.equal(
     getPdfFileName("https://cdn.cebraspe.org.br/arquivos/prova%20objetiva.PDF"),
     "prova objetiva.PDF",
   );
   assert.throws(() => getPdfFileName("https://cdn.cebraspe.org.br/arquivos/CON.pdf"));
   assert.equal(
-    getContestDirectory("/downloads", "AGU_22_PROCURADOR_FAZENDA"),
-    path.join("/downloads", "AGU_22_PROCURADOR_FAZENDA"),
+    getContestDirectory(destination, "AGU_22_PROCURADOR_FAZENDA"),
+    path.join(destination, "AGU_22_PROCURADOR_FAZENDA"),
   );
   assert.equal(
     getContestDirectory(path.parse(process.cwd()).root, "AGU"),
     path.join(path.parse(process.cwd()).root, "AGU"),
   );
-  assert.throws(() => getContestDirectory("/downloads", "../outside"));
+  assert.throws(() => getContestDirectory(destination, "../outside"));
 });

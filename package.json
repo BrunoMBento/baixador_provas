@@ -1,7 +1,7 @@
 {
   "name": "baixador-provas",
   "productName": "Baixador de Provas",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Baixa provas e gabaritos de concursos encerrados do Cebraspe.",
   "main": "src/main/main.js",
   "engines": {
